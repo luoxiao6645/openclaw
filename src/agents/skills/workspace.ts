@@ -15,7 +15,11 @@ import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontma
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
-import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import {
+  createSyntheticSourceInfo,
+  formatSkillsForPrompt,
+  type Skill,
+} from "./skill-contract.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
@@ -177,30 +181,81 @@ function resolveContainedSkillPath(params: {
   return null;
 }
 
+function shouldEnforceContainedSkillPaths(source: string): boolean {
+  return (
+    source === "openclaw-bundled" ||
+    source === "openclaw-extra" ||
+    source === "openclaw-workspace" ||
+    source === "agents-skills-project"
+  );
+}
+
+function resolveSkillPathForSource(params: {
+  source: string;
+  rootDir: string;
+  rootRealPath: string;
+  candidatePath: string;
+  enforceContainedRealpath: boolean;
+}): string | null {
+  if (params.enforceContainedRealpath) {
+    return resolveContainedSkillPath(params);
+  }
+  return tryRealpath(params.candidatePath);
+}
+
+function canonicalizeLoadedSkillPath(params: { skill: Skill; baseDirRealPath: string }): Skill {
+  const realFilePath = tryRealpath(params.skill.filePath);
+  if (!realFilePath) {
+    return params.skill;
+  }
+  return {
+    ...params.skill,
+    baseDir: params.baseDirRealPath,
+    filePath: realFilePath,
+    sourceInfo: createSyntheticSourceInfo(realFilePath, {
+      source: params.skill.source,
+      baseDir: params.baseDirRealPath,
+      scope: "project",
+      origin: "top-level",
+    }),
+  };
+}
+
 function filterLoadedSkillsInsideRoot(params: {
   skills: Skill[];
   source: string;
   rootDir: string;
   rootRealPath: string;
+  enforceContainedRealpath: boolean;
 }): Skill[] {
-  return params.skills.filter((skill) => {
-    const baseDirRealPath = resolveContainedSkillPath({
+  const filtered: Skill[] = [];
+  for (const skill of params.skills) {
+    const baseDirRealPath = resolveSkillPathForSource({
       source: params.source,
       rootDir: params.rootDir,
       rootRealPath: params.rootRealPath,
       candidatePath: skill.baseDir,
+      enforceContainedRealpath: params.enforceContainedRealpath,
     });
     if (!baseDirRealPath) {
-      return false;
+      continue;
     }
     const skillFileRealPath = resolveContainedSkillPath({
       source: params.source,
-      rootDir: params.rootDir,
-      rootRealPath: params.rootRealPath,
+      rootDir: skill.baseDir,
+      rootRealPath: baseDirRealPath,
       candidatePath: skill.filePath,
     });
-    return Boolean(skillFileRealPath);
-  });
+    if (!skillFileRealPath) {
+      continue;
+    }
+    filtered.push(
+      params.enforceContainedRealpath
+        ? skill
+        : canonicalizeLoadedSkillPath({ skill, baseDirRealPath }),
+    );
+  }
+  return filtered;
 }
 
 function resolveNestedSkillsRoot(
@@ -259,15 +314,17 @@ function loadSkillEntries(
   const loadSkills = (params: { dir: string; source: string }): Skill[] => {
     const rootDir = path.resolve(params.dir);
     const rootRealPath = tryRealpath(rootDir) ?? rootDir;
+    const enforceContainedRealpath = shouldEnforceContainedSkillPaths(params.source);
     const resolved = resolveNestedSkillsRoot(params.dir, {
       maxEntriesToScan: limits.maxCandidatesPerRoot,
     });
     const baseDir = resolved.baseDir;
-    const baseDirRealPath = resolveContainedSkillPath({
+    const baseDirRealPath = resolveSkillPathForSource({
       source: params.source,
       rootDir,
       rootRealPath,
       candidatePath: baseDir,
+      enforceContainedRealpath,
     });
     if (!baseDirRealPath) {
       return [];
@@ -276,11 +333,12 @@ function loadSkillEntries(
     // If the root itself is a skill directory, just load it directly (but enforce size cap).
     const rootSkillMd = path.join(baseDir, "SKILL.md");
     if (fs.existsSync(rootSkillMd)) {
-      const rootSkillRealPath = resolveContainedSkillPath({
+      const rootSkillRealPath = resolveSkillPathForSource({
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: rootSkillMd,
+        enforceContainedRealpath,
       });
       if (!rootSkillRealPath) {
         return [];
@@ -310,6 +368,7 @@ function loadSkillEntries(
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
+        enforceContainedRealpath,
       });
     }
 
@@ -341,11 +400,12 @@ function loadSkillEntries(
     // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
     for (const name of limitedChildren) {
       const skillDir = path.join(baseDir, name);
-      const skillDirRealPath = resolveContainedSkillPath({
+      const skillDirRealPath = resolveSkillPathForSource({
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: skillDir,
+        enforceContainedRealpath,
       });
       if (!skillDirRealPath) {
         continue;
@@ -354,11 +414,12 @@ function loadSkillEntries(
       if (!fs.existsSync(skillMd)) {
         continue;
       }
-      const skillMdRealPath = resolveContainedSkillPath({
+      const skillMdRealPath = resolveSkillPathForSource({
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: skillMd,
+        enforceContainedRealpath,
       });
       if (!skillMdRealPath) {
         continue;
@@ -389,6 +450,7 @@ function loadSkillEntries(
           source: params.source,
           rootDir,
           rootRealPath: baseDirRealPath,
+          enforceContainedRealpath,
         }),
       );
 

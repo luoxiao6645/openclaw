@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Skills: allow managed and personal skill directories to resolve through symlink/junction-backed installs while keeping workspace, extra, project-agent, and bundled roots fail-closed, so ClawHub-installed skills no longer get skipped with root escape warnings in WSL-style layouts. (#59219) Thanks @luoxiao6645.
 - fix(agents): guard nodes tool outPath against workspace boundary [AI-assisted]. (#63551) Thanks @pgondhi987.
 - fix(qqbot): enforce media storage boundary for all outbound local file paths [AI]. (#63271) Thanks @pgondhi987.
 - iMessage/self-chat: distinguish normal DM outbound rows from true self-chat using `destination_caller_id` plus chat participants, while preserving multi-handle self-chat aliases so outbound DM replies stop looping back as inbound messages. (#61619) Thanks @neeravmakwana.

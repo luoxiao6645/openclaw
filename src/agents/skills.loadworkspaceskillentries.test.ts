@@ -53,6 +53,10 @@ async function setupWorkspaceWithDiffsPlugin() {
   return { workspaceDir, managedDir, bundledDir };
 }
 
+async function symlinkDir(target: string, linkPath: string): Promise<void> {
+  await fs.symlink(target, linkPath, process.platform === "win32" ? "junction" : "dir");
+}
+
 describe("loadWorkspaceSkillEntries", () => {
   it("handles an empty managed skills dir without throwing", async () => {
     const workspaceDir = await createTempWorkspaceDir();
@@ -263,28 +267,72 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).toEqual(["remote-only"]);
   });
 
+  it("loads managed skill directories that resolve outside the managed root", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const outsideDir = await createTempWorkspaceDir();
+    const linkedSkillDir = path.join(outsideDir, "managed-link-target");
+    await writeSkill({
+      dir: linkedSkillDir,
+      name: "managed-link-target",
+      description: "Managed linked skill",
+    });
+    await fs.mkdir(managedDir, { recursive: true });
+    await symlinkDir(linkedSkillDir, path.join(managedDir, "managed-link-target"));
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    const skill = entries.find((entry) => entry.skill.name === "managed-link-target")?.skill;
+    expect(skill?.baseDir).toBe(await fs.realpath(linkedSkillDir));
+    expect(skill?.filePath).toBe(await fs.realpath(path.join(linkedSkillDir, "SKILL.md")));
+  });
+
   it.runIf(process.platform !== "win32")(
-    "skips workspace skill directories that resolve outside the workspace root",
+    "skips managed skill files that resolve outside their skill root",
     async () => {
       const workspaceDir = await createTempWorkspaceDir();
+      const managedDir = path.join(workspaceDir, ".managed");
       const outsideDir = await createTempWorkspaceDir();
-      const escapedSkillDir = path.join(outsideDir, "outside-skill");
       await writeSkill({
-        dir: escapedSkillDir,
-        name: "outside-skill",
-        description: "Outside",
+        dir: outsideDir,
+        name: "managed-file-escape",
+        description: "Outside file",
       });
-      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
-      await fs.symlink(escapedSkillDir, path.join(workspaceDir, "skills", "escaped-skill"), "dir");
+      const skillDir = path.join(managedDir, "managed-file-escape");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(skillDir, "SKILL.md"));
 
       const entries = loadWorkspaceSkillEntries(workspaceDir, {
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        managedSkillsDir: managedDir,
         bundledSkillsDir: path.join(workspaceDir, ".bundled"),
       });
 
-      expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
+      expect(entries.map((entry) => entry.skill.name)).not.toContain("managed-file-escape");
     },
   );
+
+  it("skips workspace skill directories that resolve outside the workspace root", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const outsideDir = await createTempWorkspaceDir();
+    const escapedSkillDir = path.join(outsideDir, "outside-skill");
+    await writeSkill({
+      dir: escapedSkillDir,
+      name: "outside-skill",
+      description: "Outside",
+    });
+    await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+    await symlinkDir(escapedSkillDir, path.join(workspaceDir, "skills", "escaped-skill"));
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
+  });
 
   it.runIf(process.platform !== "win32")(
     "skips workspace skill files that resolve outside the workspace root",
