@@ -39,10 +39,9 @@ function loadSingleSkillDirectory(params: {
   skillDir: string;
   source: string;
   rootRealPath: string;
-  resolvedSkillDir?: string;
   maxBytes?: number;
 }): Skill | null {
-  const skillFilePath = path.join(params.resolvedSkillDir ?? params.skillDir, "SKILL.md");
+  const skillFilePath = path.join(params.skillDir, "SKILL.md");
   const raw = readSkillFileSync({
     rootRealPath: params.rootRealPath,
     filePath: skillFilePath,
@@ -87,27 +86,14 @@ function loadSingleSkillDirectory(params: {
 
 function listCandidateSkillDirs(dir: string): string[] {
   try {
-    const skillDirs: string[] = [];
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith(".") || entry.name === "node_modules") {
-        continue;
-      }
-      const skillDir = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        skillDirs.push(skillDir);
-        continue;
-      }
-      if (entry.isSymbolicLink()) {
-        try {
-          if (fs.statSync(skillDir).isDirectory()) {
-            skillDirs.push(skillDir);
-          }
-        } catch {
-          // ignore broken symlinks
-        }
-      }
-    }
-    return skillDirs.sort((left, right) => left.localeCompare(right));
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules",
+      )
+      .map((entry) => path.join(dir, entry.name))
+      .sort((left, right) => left.localeCompare(right));
   } catch {
     return [];
   }
@@ -135,21 +121,14 @@ export function loadSkillsFromDirSafe(params: { dir: string; source: string; max
   }
 
   const skills = listCandidateSkillDirs(rootDir)
-    .map((skillDir) => {
-      let skillRootRealPath: string;
-      try {
-        skillRootRealPath = fs.realpathSync(skillDir);
-      } catch {
-        return null;
-      }
-      return loadSingleSkillDirectory({
+    .map((skillDir) =>
+      loadSingleSkillDirectory({
         skillDir,
         source: params.source,
-        rootRealPath: skillRootRealPath,
-        resolvedSkillDir: skillRootRealPath,
+        rootRealPath,
         maxBytes: params.maxBytes,
-      });
-    })
+      }),
+    )
     .filter((skill): skill is Skill => skill !== null);
 
   return { skills };
